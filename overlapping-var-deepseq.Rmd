@@ -1,0 +1,13 @@
+---
+title: "Overlapping-var-deepseq"
+author: "Monzó, Carolina"
+date: "7/17/2018"
+output: pdf_document
+---
+```{r}
+#install.packages("VennDiagram")
+library(VennDiagram)
+grid.newpage()
+draw.pairwise.venn(area1 = 2449, area2 = 2712, cross.area = 2180, category = c("Mpileup", "Freebayes"), lty = rep("blank", 2), fill = c("dodgerblue", "yellow"), alpha = rep(0.5, 2), cat.pos = c(230, 130), cat.dist = rep(0.025, 2))
+```
+
