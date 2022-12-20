@@ -1,0 +1,243 @@
+---
+title: 'DiffExp_MicroArray'
+author: "Monzó, Carolina"
+date: "5/5/2017"
+---
+
+Dataset E-GEOD-28417, contains data from a differential expression study on patients and controls with Duchenne Syndrome, muscular degeneration disease. It is composed by 16 samples from muscular biopsy of patients with Duchenne Syndrome, and 6 muscular biopsy samples from control patients.
+
+### Packages to load
+```{r loading packages, warning=FALSE}
+pacman::p_load("GEOquery","Biobase","GSEABase","annotate","gcrma","affy","multtest","genefilter","ReportingTools","samr","Category","GO.db","GOstats","ArrayExpress","affy","hgu133plus2.db", "oligo", "limma", "RSQlite")
+```
+
+### Obtaining the data
+After downloading the raw data from GEO (Gene Expression Omnibus), we load the file gse38417raw.rda
+```{r loading data}
+load("gse38417raw.rda")  # The file must be located in the directory in use
+```
+
+We use RMA method to normalize the samples
+
+```{r normalization}
+gse38417rma = rma(gse38417raw)
+```
+
+## Generating the expression set using ENTREZ and ENSEMBL identifiers
+
+```{r Expression Set, echo = FALSE, warnings = FALSE, error=FALSE}
+ids = featureNames(gse38417rma)
+anotacion = AnnotationDbi::select(hgu133plus2.db,keys=ids, columns=c("ENTREZID","ENSEMBL","SYMBOL"),keytype="PROBEID")
+sonda = match(featureNames(gse38417rma),anotacion[,"PROBEID"])
+fData(gse38417rma) =  anotacion[sonda,]
+# Cargamos los datos fenotipicos
+pData(gse38417rma)[,"FactorValue..sample.type."] = 
+  factor(pData(gse38417rma)[,"FactorValue..sample.type."])
+GROUP = as.numeric(pData(gse38417rma)[,"FactorValue..sample.type."]) - 1
+df = data.frame(pData(gse38417rma),GROUP)
+pData(gse38417rma) = df
+annotation(gse38417rma) = "hgu133plus2"
+```
+
+## T test with equal variances
+
+We use T-test to do marginal differential expression analysis of the two samples groups (normal and affected by Duchenne Syndrome). We asume we are applying the T-test on a group of samples with normal distribution even though the amount of samples is too small. We will have big typical deviation, but it is expected.
+
+```{r ttest}
+testt = genefilter::rowttests(gse38417rma,pData(gse38417rma)[,"FactorValue..sample.type."])
+p_valor = testt$"p.value"
+```
+
+We obtain the number of genes with p-value less than 0.01 and check that 27462 genes are under the threshold. We do this because we want very differentially expressed genes only.
+```{r significant ttest values}
+table(testt[,"p.value"]<0.01)
+```
+
+We use the Benjamini-Hochberg method to calculate adjusted p-value, this way the number of genes under the 0.01 threshold is reduced to 24784. This method is based on False Discovery Rate to delete false positives from the group of genes we will see as differentially expressed.
+
+```{r ttest BH}
+testt_BH = mt.rawp2adjp(p_valor,"BH")
+head(testt_BH$adjp)
+table(testt_BH$adjp[,"BH"]<0.01)
+```
+
+Next we use the Bonferroni test to calculate the adjusted p-value. In this case, the number of genes under the 0.01 threshold is 5348. This method is adjusting the confidence level of each indivdual interval.
+
+```{r ttest BON}
+testt_BON = mt.rawp2adjp(p_valor,"Bonferroni")
+head(testt_BON$adjp)
+table(testt_BON$adjp[,"Bonferroni"]<0.01)
+```
+
+Extract data of interest
+
+```{r ttest statistics}
+sigBH  = testt_BH$adjp[,"BH"] < 0.05
+sigBON = testt_BON$adjp[,"Bonferroni"] < 0.05
+sgBH_index = testt_BH$index[sigBH]
+sgBH_index = na.omit(sgBH_index)
+sgBON_index = testt_BH$index[sigBON]
+sgBON_index = na.omit(sgBON_index)
+```
+
+#### Generating a PDF file with results from the T-test - Benjamini-Hochberg.
+
+We add the names of the genes in an ENTREZID format
+
+```{r ttest BH ENTREZ}
+ID = featureNames(gse38417rma)[sgBH_index]
+Name = as.character(lookUp(ID,"hgu133plus2.db", "GENENAME"))
+entrezid =as.character(lookUp(ID, "hgu133plus2.db", "ENTREZID"))
+ensemblid_bh=as.character(lookUp(ID, "hgu133plus2.db", "ENSEMBL"))
+ensemblid_bh = ifelse(ensemblid_bh == "NA",NA,paste("<a href='http://www.ensembl.org/Homo_sapiens/Gene/Summary?g=",ensemblid_bh,"'>",ensemblid_bh,"</a>",sep=""))
+ID[ID == "NA"] = NA
+Name[Name == "NA"] = NA
+entrezid = ifelse(entrezid == "NA",NA, paste("<a href='http://www.ncbi.nlm.nih.gov/gene/?term=", entrezid,"'>",entrezid,"</a>",sep=""))
+```
+
+We add the statistics and generate the report
+
+```{r ttest BH report}
+df = data.frame(ID = ID, Name = Name, entrezid = entrezid, ensemblid = ensemblid_bh, stringsAsFactors=F, p_value_raw = na.omit(testt_BH$adjp[sigBH,"rawp"]), p_value_adj = na.omit(testt_BH$adjp[sigBH, "BH"]))
+foutput = "gse38417_BHttest"
+htmlRep1 = HTMLReport(shortName = foutput,title = foutput, reportDirectory = "./reports")
+publish(df,htmlRep1)
+finish(htmlRep1)
+```
+
+#### Generating a PDF with results from the T-Test - Bonferroni
+
+First we add the corresponding names to the genes by using the annotation file hgu133plus2.db (manifest illumina for this specific chip) from Bioconductor.
+
+```{r ttest BON ENTREZ}
+ID2 = featureNames(gse38417rma)[sgBON_index]
+Name = as.character(lookUp(ID2,"hgu133plus2.db", "GENENAME"))
+entrezid =as.character(lookUp(ID2, "hgu133plus2.db", "ENTREZID"))
+ensemblid_bon=as.character(lookUp(ID2, "hgu133plus2.db", "ENSEMBL"))
+ID2[ID2 == "NA"] = NA
+Name[Name == "NA"] = NA
+entrezid = ifelse(entrezid == "NA",NA, paste("<a href='http://www.ncbi.nlm.nih.gov/gene/?term=", entrezid,"'>",entrezid,"</a>",sep=""))
+ensemblid_bon = ifelse(ensemblid_bon == "NA",NA,paste("<a href='http://www.ensembl.org/Homo_sapiens/Gene/Summary?g=",ensemblid_bon,"'>",ensemblid_bon,"</a>",sep=""))
+```
+
+We then add the statistics and generate the report.
+```{r ttest BON report}
+df = data.frame(ID2 = ID2, Name = Name, entrezid = entrezid, ensemblid = ensemblid_bon, stringsAsFactors=F, p_value_raw = na.omit(testt_BON$adjp[sigBON,"rawp"]), p_value_adj = na.omit(testt_BON$adjp[sigBON, "Bonferroni"]))
+foutput = "gse38417_BONttest"
+htmlRep2 = HTMLReport(shortName = foutput,title = foutput, reportDirectory = "./reports")
+publish(df,htmlRep2)
+finish(htmlRep2)
+```
+
+
+## Moderated t-test (limma)
+
+Limma is a specific test that uses a linear moder for the expression data of each gene. It takes into account that each sample has independent values.
+We begin by generating a matrix with the groups on which we want to do the analysis: control and patients.
+
+```{r matrix}
+matriz = model.matrix(~ pData(gse38417rma)[,"FactorValue..sample.type."])
+```
+
+We then do linear adjustment and moderated statistic, and in the end we add correction methods from Benjamini-Hochberg and Bonferroni.
+
+```{r ajustes}
+ajusteLineal = lmFit(gse38417rma,matriz)
+estadsiticoModerado = eBayes(ajusteLineal)
+topTable(estadsiticoModerado,coef=2,adjust ="BH")
+topTable(estadsiticoModerado,coef=2,adjust ="bonferroni")
+```
+
+We extract data of interest
+
+```{r limma statistics}
+tableBH=topTable(estadsiticoModerado,coef=1, number= length(featureNames(gse38417rma)),adjust="BH")
+boolBH = tableBH[,"adj.P.Val"] <0.05
+sigBH = tableBH[boolBH,]
+tableBON=topTable(estadsiticoModerado,coef=1, number= length(featureNames(gse38417rma)),adjust="bonferroni")
+boolBON = tableBON[,"adj.P.Val"] <0.05
+sigBON = tableBON[boolBON,]
+```
+
+
+
+#### Generating a PDF with results from limma test - Benjamini-Hochberg
+
+We must add the corresponding annotation first
+```{r limma BH report}
+ID = rownames(sigBH)
+Name = as.character(lookUp(ID,"hgu133plus2.db", "GENENAME"))
+entrezid =as.character(lookUp(ID, "hgu133plus2.db", "ENTREZID"))
+ensemblid_bon=as.character(lookUp(ID, "hgu133plus2.db", "ENSEMBL"))
+ensemblid_bon = ifelse(ensemblid_bon == "NA",NA,paste("<a href='http://www.ensembl.org/Homo_sapiens/Gene/Summary?g=",ensemblid_bon,"'>",ensemblid_bon,"</a>",sep=""))
+ID[ID == "NA"] = NA
+Name[Name == "NA"] = NA
+entrezid = ifelse(entrezid == "NA",NA, paste("<a href='http://www.ncbi.nlm.nih.gov/gene/?term=", entrezid,"'>",entrezid,"</a>",sep=""))
+df = data.frame(ID = ID,Name = Name,entrezid = entrezid,ensemblid = ensemblid_bon, stringsAsFactors=F, p_value_raw = sigBH[,"P.Value"], p_value_adj =sigBH[,"adj.P.Val"])
+foutput = "gse38417_BHlimma"
+htmlRep1 = HTMLReport(shortName = foutput,title = foutput, reportDirectory = "./reports")
+
+publish(df,htmlRep1)
+finish(htmlRep1)
+```
+
+#### Generating a PDF with limma test - Bonferroni
+
+```{r limma BON report}
+ID = rownames(sigBON)
+Name = as.character(lookUp(ID,"hgu133plus2.db", "GENENAME"))
+entrezid =as.character(lookUp(ID, "hgu133plus2.db", "ENTREZID"))
+ensemblid_bon=as.character(lookUp(ID, "hgu133plus2.db", "ENSEMBL"))
+ensemblid_bon = ifelse(ensemblid_bon == "NA",NA,paste("<a href='http://www.ensembl.org/Homo_sapiens/Gene/Summary?g=",ensemblid_bon,"'>",ensemblid_bon,"</a>",sep=""))
+ID[ID == "NA"] = NA
+Name[Name == "NA"] = NA
+entrezid = ifelse(entrezid == "NA",NA, paste("<a href='http://www.ncbi.nlm.nih.gov/gene/?term=", entrezid,"'>",entrezid,"</a>",sep=""))
+
+df = data.frame(ID = ID,Name = Name,entrezid = entrezid,ensemblid = ensemblid_bon, stringsAsFactors=F, p_value_raw = sigBON[,"P.Value"], p_value_adj =sigBON[,"adj.P.Val"])
+foutput = "gse38417_BONlimma"
+htmlRep1 = HTMLReport(shortName = foutput,title = foutput, reportDirectory = "./reports")
+
+publish(df,htmlRep1)
+finish(htmlRep1)
+```
+
+
+
+## SAM method
+
+SAM method, Significance Analysis of Microarrays, takes into account that the distribution of samples may not be normal. It performs not parametric statistics for each gene to determine if gene expression is significantly related with the response.
+
+```{r SAM, message=FALSE}
+samfit = SAM(exprs(gse38417rma),pData(gse38417rma)[,"FactorValue..sample.type."],resp.type="Two class unpaired",nperms = 100, fdr.output = 0.05)
+```
+
+Plotting the results, we see the breaking point separating up and down regulated genes
+
+```{r samplot}
+plot(samfit)
+```
+  
+Checking the delta values, we differentiate the genes that are significant.
+
+The delta value is:
+```{r sam delta}
+samfit$del
+```
+The possible delta values are:
+```{r sam deltatable}
+head(samfit$delta.table)
+```
+
+And the significant genes:
+```{r sam significant}
+head(samfit$siggenes.table)
+```
+
+
+```{r showing reports, include = FALSE}
+browseURL("reports/gse38417_BHttest.html")
+browseURL("reports/gse38417_BONttest.html")
+browseURL("reports/gse38417_BHlimma.html")
+browseURL("reports/gse38417_BONlimma.html")
+```
+
