@@ -1,0 +1,62 @@
+---
+title: "fastq_counts_run_report"
+author: "Pablo Marin-Garcia"
+date: "8/11/2014"
+output:
+  html_document:
+    fig_caption: yes
+    fig_height: 8
+    fig_width: 8
+---
+
+```{r}
+source("~/cpd_pmg/devel/PMG_dev/R_modules/pmg_utils.R")
+```
+
+** Getting the data
+
+```{r}
+
+seq_folder_path <- "/nfs/production4b/external_production/sequencing"
+run_folder_name <- "140627_H114_0335_AC4WVYACXX"
+count_df_file <- "fastq_count.df"
+
+count_df_path <- file.path(seq_folder_path, run_folder_name, count_df_file)
+
+fastq_dat <- read.delim(count_df_path) 
+
+str(fastq_dat)
+
+```
+
+** Plotting the data
+
+
+```{r}
+
+
+library ('ggplot2')
+require('plyr')
+date <-Sys.Date()
+
+# FUNCTIONS ---------------------------------------------------------------
+# lane is the first arg in order to use sapply
+get_total_reads_per_lane <- function (lane,dat){sum(dat[dat$lane==lane,"total_sum"])}
+get_percent <- function(lane,val){as.vector(100*val/totals[lane])}
+
+```
+
+```{r fig.height=10, fig.width=10}
+
+# remove fix for plotting count per sample
+
+not_wanted_lanes <- c("L1", "L6", "L7", "L8")
+#not_wanted_lanes <- c("L1")
+dat4plot = subset(fastq_dat, !Lane %in% not_wanted_lanes)
+
+ggplot(data=dat4plot)+geom_point(aes(x=Sample, y=count))+facet_wrap(~ Lane, scales='free_x')+theme(axis.text.x  = element_text(angle=90, vjust=0.5))
+
+
+
+```
+

@@ -1,0 +1,328 @@
+---
+title: "ROI_plotracks"
+author: "asj"
+date: "10/14/2014"
+output: html_document
+---
+
+Environment initialization
+==========================
+```{r}
+verbose = 3  # debug
+source("/cpd_home/asj/R_modules/asj_utils.R")
+
+##Working directory
+wd <- "/cpd_home/asj/production/plotracks/hypobeta_20141120/"
+analysis_dir <- file.path(wd, "analysis")
+plots_dir <- file.path(wd, "plots")
+``` 
+
+
+HighlightTrack_plot
+========================
+
+### Required library 
+
+```{r}
+library ("xlsx")
+library ("GenomicRanges")
+library ("Biostrings")
+library ("Rsamtools")
+# library ("XVector")
+library ("Biobase")
+library ("AnnotationDbi")
+library ("grid")
+library ("GenomicFeatures")
+library ("TxDb.Hsapiens.UCSC.hg19.knownGene")
+library ("Gviz")
+library("biomaRt")
+library("Rsamtools")
+library("BSgenome")
+library("BSgenome.Hsapiens.UCSC.hg19")
+library("rtracklayer")
+library("BiocGenerics")
+library("VariantAnnotation")  
+     
+```
+
+### Query information
+
+```{r}
+### query biomart 
+
+ensembl <- useMart(biomart="ENSEMBL_MART_ENSEMBL", host="grch37.ensembl.org", path="/biomart/martservice" ,dataset="hsapiens_gene_ensembl")
+#ensembl <- useMart("ensembl",dataset="hsapiens_gene_ensembl")
+
+listDatasets(ensembl)[grepl("sapiens", listDatasets(ensembl)$dataset),] #this is the version that useMArt are using 
+
+
+final_filter <- "hgnc_symbol"
+
+gene_basic_info <- c(     "ensembl_gene_id"
+                        , "external_gene_name"
+                        , "start_position"
+                        , "end_position"
+                        , "chromosome_name"
+                        , "strand"
+                        )
+
+gene_desc_info <- c(    "exon_chrom_start"
+                      , "exon_chrom_end"
+                      , "gene_biotype"
+                      )
+
+other_gene_info <- c(  
+                        "ensembl_exon_id"
+                      , "ensembl_transcript_id"
+                      )
+
+genome <- "hg19"
+
+query <- c("TMC6", "SEC23A")
+# 
+# png_width=640
+# png_height=440
+```
+
+### Function to obtain info about genes from ENSEMBL through biomaRt
+
+[ERROR]
+restful url for build 37 is "http://grch37.ensembl.org/biomart/martservice"
+useMart@host <- "http://grch37.ensembl.org/biomart/martservice"
+
+```{r}
+BMgenes <- function (query){
+  
+#   gene_info(info)
+  
+#   ensembl <- useMart("ensembl", dataset="hsapiens_gene_ensembl") #VERSION 38!!!
+#   ensembl <- useMart(biomart="ENSEMBL_MART_ENSEMBL", host="grch37.ensembl.org", path="/biomart/martservice" ,dataset="hsapiens_gene_ensembl")
+  
+  genes.info.df <- NULL
+  
+  for (i in query){
+    geneid_result <- getBM (
+        attributes = c(gene_basic_info, gene_desc_info, other_gene_info ),
+        filters = final_filter, 
+        values = i,
+        mart = ensembl
+        )    
+    feedback(str(geneid_result))
+    # geneid_result is a df
+    # check that I had a result
+    
+    if(nrow(geneid_result)){
+      
+      if(exists('genes.info.df') & is.data.frame(genes.info.df)) {
+        # debug
+        genes.info.df <- rbind(genes.info.df, geneid_result)
+        
+        } else {
+          feedback(cat("crating dataframe\n"),v=3)
+          genes.info.df <- data.frame(geneid_result)
+              }
+      } else {
+        # log error
+        cat(paste0("#[WARNING] No gene info for gene name:'",i,"'\n"))      
+            }
+        }
+    
+  names(genes.info.df) <- names(geneid_result)
+  
+  
+  feedback(str(genes.info.df),v=3)
+  return(genes.info.df[grep("LRG", genes.info.df$chromosome_name, invert=TRUE),])
+
+}
+
+```
+
+
+### Definition of variables  
+
+```{r} 
+bamfiles.df <- read.delim("/storage/hpc3_scratch/hypobeta_axeq_incliva/analysis/bam/merged_bams_axeq_incliva/reformated_chr_bam/hypobeta_merged_bam.fof", header=F)
+
+names(bamfiles.df)[1] <- "sample"
+
+bamfiles.df$is_case <- c(1,0,0,1)
+
+bamFiles <- bamfiles.df$sample
+
+```
+
+
+###Definition tracks
+
+```{r plot track_track hypobeta}
+final_plotrack <- function(query){
+   
+  for (gene in query) {
+    #test: gene <- "SEC23A"
+    
+    query_result <- BMgenes (gene)
+    
+    width <- query_result$exon_chrom_end - query_result$exon_chrom_start
+    query_result <- cbind(query_result, width)
+    query_result <- query_result[,c(1:8,10:12,9)]
+  
+    names(query_result) <- c(
+      "gene",
+      "symbol",
+      "start_gene", 
+      "end_gene", 
+      "chromosome", 
+      "strand", 
+      "start", 
+      "end", 
+      "exon", 
+      "transcript", 
+      "width",
+      "description")
+  
+    query_result$strand <- ifelse(query_result$strand==1,  "+", "-")
+        
+    chr <- unique(query_result$chromosome)
+    start <- unique(query_result$start_gene) - 50
+    end <- unique(query_result$end_gene) + 50
+    
+    iTrack <- IdeogramTrack(      genome = genome
+                                  , chromosome = chr
+                                  , showBandId = TRUE
+                                  , cex.bands = 0.5
+                                  , fontsize=12
+                                  )
+    
+    gTrack <- GenomeAxisTrack(      add53 = T
+                                    , add35 = T
+                                    , fontsize = 14
+                                    )
+    
+    generalTrack <- GeneRegionTrack (   query_result
+                                        , genome = genome
+                                        , chromosome = chr
+                                        , end = end
+                                        , start = start
+                                        , transcriptAnnotation = "transcript"
+                                        , showId = TRUE 
+                                        , name = "GeneRegionTrack"
+                                        , shape="arrow"
+                                        , fontsize = 14
+                                        )
+    
+    
+    
+    collapsedTrack <- GeneRegionTrack (   query_result
+                                          , genome = genome
+                                          , chromosome = chr
+                                          , end = end
+                                          , start = start
+                                          , showId = TRUE 
+                                          , name = "CollapsedTrack"
+                                          , stacking= "dense"
+                                          , shape="arrow"
+                                          , background.panel = "#FFFEDB"
+                                          , fontsize = 16
+                                          )
+    if(gene == "TMC6"){
+      var_position <- 76121318
+    }else{
+      var_position <- c(39514394, 39532559)
+    }
+    
+    width_value <- 5
+    
+    ht_general <- HighlightTrack(    trackList = list(generalTrack)
+                                               , start = var_position
+                                               , width = width_value
+                                               , chromosome = chr
+                                               )
+    bamTracks <-list()
+      for (bam in bamFiles){
+      #test:  bam <- '/storage/hpc3_scratch/hypobeta_axeq_incliva/analysis/bam/merged_bams_axeq_incliva/reformated_chr_bam/DHB-14_00_axeq_incliva_chr.sorted.bam' 
+      file.name.items <- unlist(strsplit (as.character(basename(bam)), split= "_axeq")[[1]][1])
+        
+      ## test: bam <- "/storage/hpc3_scratch/hypobeta_axeq_incliva/analysis/bam/bam_subset_alba/DHB-14_00_subset_ROI.rgmod.sorted.sorted_chr.bam"
+      ## bam <- as.character(bamFiles[1])
+      
+      state <- bamfiles.df[bamfiles.df$sample == bam,]$is_case 
+      
+          if(state==0){
+            final_background <- "#FFFFEB"    ## colour specified by hexadecimal string of the form #rrggbb (Yellow) PARENTS
+          }else{
+            final_background <- "#D6EBFF"  ## colour specified by hexadecimal string of the form #rrggbb (Blue) CHILDREN
+          }
+          
+      bamTracks[[bam]] <- DataTrack(  range = bam
+    #                       , options (ucscChromosomeNames = F)
+                            , genome = genome
+                            , type = c("l","g")
+                            , name = file.name.items
+                            , chromosome = chr
+                            , from = start
+                            , to = end
+                            , ylim = c(0,150)
+                            , background.panel = final_background
+      #                      , window = -1
+    )
+    }
+    
+#     ht_bamtracks <- HighlightTrack(    trackList = bamTracks
+#                                        , start = var_position
+#                                        , width = rep(width_value, length(var_position))
+#                                        , chromosome = chr
+#                                        )
+#     
+  
+    gene_extension <- paste0(gene, "_with_var_plotrack.png")
+    plot_path <- file.path("~/winbioinfo/users/asj/projects/hipobeta/plots", gene_extension)
+    
+    png(file=plot_path, width=800, heigh=800, units="px")
+#     png(file=plot_path)
+    feedback(c("##[MSG] writting coverage for gene '",gene,"' into file '",plot_path,"'"))
+    
+    plotTracks( c(list(  iTrack
+                         , gTrack
+                         , ht_general
+                         #, generalTrack
+                         , collapsedTrack)
+                         #, ht_bamtracks
+                         #)
+                  , bamTracks
+                  )
+                , from = start
+                , to = end
+                , main = paste0 (gene)
+                )
+    
+    dev.off()
+    }
+}
+```
+
+```{r}
+#final_plots <- final_plotrack (c("APOB","PCSK9", "ANGPTL3", "TMC6", "SEC23A"))
+final_plots <- final_plotrack (query)
+```
+
+
+###Process to obtain a correct bam
+
+```
+asj@ubuntu:~/incliva/r/r_workspace/bioconductor_training/project_gviz/data$ 
+
+samtools view -H DHB-18.00.sorted.gene_subset.bam |perl -lpe 's/SN:([1-9XY])/SN:chr$1/' > DHB-18.00.sorted.gene_subset_chr.sam
+
+samtools view  DHB-18.00.sorted.gene_subset.bam | perl -lane '$F[2]=~s/^([1-9XY])/chr$1/; $F[6]=~s/^([1-9XY])/chr$1/; print join("\t", @F) ' >> DHB-18.00.sorted.gene_subset_chr.sam
+
+samtools view -hSb DHB-18.00.sorted.gene_subset_chr.sam > DHB-18.00.sorted.gene_subset_chr.bam
+
+samtools sort DHB-18.00.sorted.gene_subset_chr.bam DHB-18.00.sorted.gene_subset_chr.sorted
+
+samtools index DHB-18.00.sorted.gene_subset_chr.sorted.bam 
+
+
+asj@HPC7_ngs_vm2s:[/media/data2/asj_workspace/r_workspace/bioconductor_training/projects/exome/plotTracks/analysis/plots/exome_plots]
+
+for bamfile in $(cat samples_for_testing.fof); do echo $bamfile; bamprefix=${bamfile%.bam}; samtools view -H $bamfile | perl -lpe 's/SN:([1-9XY])/SN:chr$1/' > ${bamprefix}_chr.sam; echo "header sam done" ; samtools view $bamfile | perl -lane '$F[2]=~s/^([1-9XY])/chr$1/; $F[6]=~s/^([1-9XY])/chr$1/; print join("\t", @F) ' >> ${bamprefix}_chr.sam;echo "sam done"; samtools view -hSb ${bamprefix}_chr.sam > ${bamprefix}_chr.bam; echo "bam done"; samtools sort ${bamprefix}_chr.bam ${bamprefix}_chr.sorted;echo "sort done"; samtools index ${bamprefix}_chr.sorted.bam;echo "index done"; done
+```

@@ -1,0 +1,254 @@
+---
+title: "General PlotTracks Code"
+author: "asj"
+date: "11/25/2014"
+output: html_document
+---
+
+
+Gviz provides a structured visualization framework to plot any type of data along genomic coordinate. In that individual types of genomic features or data are represented by separate tracks. When combining multiple objects,
+the individual tracks will always share the same genomic coordinate system.
+
+Here I'm going to show you how do a representation using this package to obtain a plot with the genomic coordinates, the coverage obtained from a sequencing in this region, and how we can mark a position in a wanted track.
+
+
+##Required library
+```{r}
+library ("Gviz")
+library ("GenomicRanges")
+library ("Rsamtools")
+library("biomaRt")
+```
+
+##Obtaining information of genes from biomaRt
+```{r}
+###We can define the region that we want representate obtaining the information from a query performed from biomaRt package. For this, we have to define the information that we need.
+
+gene_basic_info <- c(     "ensembl_gene_id"
+                        , "external_gene_name"
+                        , "start_position"
+                        , "end_position"
+                        , "chromosome_name"
+                        , "strand"
+                        )
+
+gene_desc_info <- c(    "exon_chrom_start"
+                      , "exon_chrom_end"
+                      )
+
+other_gene_info <- c(  
+                        "ensembl_exon_id"
+                      , "ensembl_transcript_id"
+                      )
+
+###The filter that you can use to perform the search is different. For example, you can introduce the HGNC symbol or the Ensembl Gene ID. In this case, we're going to use the HGNC symbol of the genes.
+
+final_filter <- "hgnc_symbol"
+#final_filter <- "ensembl_gene_id"
+
+###Here I had a problem. Now the newest Ensembl version is the 38, but I want continue with the 37 version. For define this you need use de useMart function like this:
+
+#ensembl <- useMart("ensembl",dataset="hsapiens_gene_ensembl")
+
+###But when you check the version that biomRt is automaticatly calling, you can see that this is the 38 version.
+
+#> listDatasets(ensembl)[grepl("sapiens", listDatasets(ensembl)$dataset),]
+#                dataset                 description version
+#32 hsapiens_gene_ensembl Homo sapiens genes (GRCh38)  GRCh38
+
+###If you want maintain the 38 version of ensembl build, you need aply this function.
+
+ensembl <- useMart(biomart="ENSEMBL_MART_ENSEMBL", host="grch37.ensembl.org", path="/biomart/martservice" ,dataset="hsapiens_gene_ensembl")
+
+#> listDatasets(ensembl)[grepl("sapiens", listDatasets(ensembl)$dataset),]
+#                 dataset                     description    version
+#31 hsapiens_gene_ensembl Homo sapiens genes (GRCh37.p13) GRCh37.p13
+
+###Now we have defined the information that we want obtain introducing the HGNCsymbol of a gene or genes, and the version that we want to use. I've making a function to obtain this info.
+
+BMgenes <- function (query){
+  
+  genes.info.df <- NULL
+  
+  for (i in query){
+    geneid_result <- getBM (
+        attributes = c(gene_basic_info, gene_desc_info, other_gene_info ),
+        filters = final_filter, 
+        values = i,
+        mart = ensembl
+        )    
+        
+    if(nrow(geneid_result)){
+      
+      if(exists('genes.info.df') & is.data.frame(genes.info.df)) {
+      
+        genes.info.df <- rbind(genes.info.df, geneid_result)
+        
+        } else {
+          genes.info.df <- data.frame(geneid_result)
+              }
+      } else {
+        # log error
+        cat(paste0("#[WARNING] No gene info for gene name:'",i,"'\n"))      
+            }
+        }
+    
+  names(genes.info.df) <- names(geneid_result)
+  
+  return(genes.info.df[grep("LRG", genes.info.df$chromosome_name, invert=TRUE),])
+
+}
+
+###Defining the variables  
+
+#query <- "PCSK9"
+#query <- c("TP53", "PTEN")
+
+
+control_genes <- c("MYH15", "CCND3", "RAD52", "LAMA3", "ZNF813")
+cases_genes <- c("PHTF1", "IGFBP1", "IDI2", "PIK3C2G", "VAMP1")
+
+
+genome <- "hg19"
+
+bamFiles <- "/storage/ethernus_backup/exome_400_workdir/tmp/MET_400.merge.coincident_variants.subset_chr.sorted.MET_3007.bam"  
+
+# bamFiles <- c( "/cpd_home/asj/projects/exome/hypobeta/bams/DHB-14_00_subset_ROI.rgmod.sorted.sorted_chr.sorted.bam"
+#              , "/cpd_home/asj/projects/exome/hypobeta/bams/DHB-14_01_subset_ROI.rgmod.sorted.sorted_chr.sorted.bam"   
+#              , "/cpd_home/asj/projects/exome/hypobeta/bams/DHB-14_02_subset_ROI.rgmod.sorted.sorted_chr.sorted.bam" 
+#              , "/cpd_home/asj/projects/exome/hypobeta/bams/DHB-18_00_subset_ROI.rgmod.sorted.sorted_chr.sorted.bam" 
+#              )
+             
+# for (i in bamFiles){indexBam(i)} ## Index the bam file 
+
+#condition <- c(1,0,0,1) ##children are cases (1) and parents are controls (0)
+#bamfiles_df <- cbind(bamFiles, case_control)
+
+
+###Caution!! Here I found a problem that takes me enoght time. In my case, I had the bam files in this format. As you can observe, the chromosome column is in a format only with the number of chr (in this case "1", non "chr1"). Gviz need the chromosome format like "chr1", and before working with the bam files you need convert them.
+
+[...]
+@SQ     SN:NC_007605    LN:171823
+@SQ     SN:hs37d5       LN:35477943
+@RG     ID:DHB-18.00_L004_L005  PL:Illumina     SM:DHB-18.00_L004_L005  DS:ref=1KG,pfx=/storage/ethernus_miscellanea/References/human/1kg/hs37d5.fa.gz  CN:INCLIVA      DT:0000-00-00   PU:H114_C1DAFACXX.4_5
+H114:261:C1DAFACXX:4:1101:10683:71069   161     1       10002   0       101M    16      69821   0       AGCCCTAGCCCTAGCCCTAGCCCTAGCCCTAGCCCTAACCCTAACCCTAACCCTAACCCTAACCCTAACCCTAACCCTAACCCTAACCCTAACCCTAACCC
+   B@BFFFFFHHHDHIIIJJGIIGIJJDHIJGGG@FFIGIHJIIIIFFHIJIHIIEGIJHH@HIHHFFFDDDDDECCEDDDCD@A?A?ABA<?C1<<?<?BD?   NM:i:6  AS:i:74 XS:i:74 RG:Z:DHB-18.00_L004_L005        ct:i:0  is:Z:GCCAAT
+[...]
+
+###To perform the conversion, here I show a script that I've created to realize this in only one step (at the shell)
+
+for bamfile in $(cat samples_for_testing.fof); do echo $bamfile; bamprefix=${bamfile%.bam}; samtools view -H $bamfile | perl -lpe 's/SN:([1-9XY])/SN:chr$1/' > ${bamprefix}_chr.sam; echo "header sam done" ; samtools view $bamfile | perl -lane '$F[2]=~s/^([1-9XY])/chr$1/; $F[6]=~s/^([1-9XY])/chr$1/; print join("\t", @F) ' >> ${bamprefix}_chr.sam;echo "sam done"; samtools view -hSb ${bamprefix}_chr.sam > ${bamprefix}_chr.bam; echo "bam done"; samtools sort ${bamprefix}_chr.bam ${bamprefix}_chr.sorted;echo "sort done"; samtools index ${bamprefix}_chr.sorted.bam;echo "index done"; done
+
+```
+
+##PlotTracks function
+```{r}
+query <- control_genes
+###Now, when we've defined all the variables and the bam files are changed, we're going to run the final function to obtain the plotTrack
+
+final_plotrack <- function(query){
+   
+  for (gene in query) {
+    #test: gene <- query[1]
+    #test: gene <- query
+  
+    query_result <- BMgenes (gene)
+    width <- query_result$exon_chrom_end - query_result$exon_chrom_start
+    query_result <- cbind(query_result, width)
+    
+    names(query_result) <- c("gene", "symbol", "start_gene", "end_gene", "chromosome", "strand", "start", "end", "exon", "transcript", "width")
+    query_result$strand <- ifelse(query_result$strand==1,  "+", "-")
+        
+    chr <- unique(query_result[query_result$symbol == gene, "chromosome"])
+    start_gene <- unique(query_result [query_result$symbol == gene, "start_gene"])
+    end_gene <- unique(query_result [query_result$symbol == gene, "end_gene"])
+    
+    start <- start_gene - 1500
+    end <- end_gene + 1500  
+    
+    #iTrack <- IdeogramTrack(    genome = genome
+     #                         , chromosome = chr
+      #                        )
+    
+    gTrack <- GenomeAxisTrack(    add53 = T
+                                , add35 = T
+                                , genome = genome
+                                )
+    
+                                              
+    gmtrack <- GeneRegionTrack (  query_result
+                                , genome = genome
+                                , chromosome = chr
+                                , start = start
+                                , end = end
+                                , transcriptAnnotation = "transcript"
+                                , showId = TRUE 
+                                , name = "ENSEMBL"
+                                )
+     
+     
+   
+     variation <- start + 10000 
+     var_position <- variation
+     width_value <- 5
+     
+     ht <- HighlightTrack(    trackList = list(gmtrack)
+                            , start = var_position
+                            , width = width_value
+                            , chromosome = chr
+                            )
+                            
+      ##Here I want emphasise other problem that I had. If in the final ploTrack you want representate more than one coverage track, you need create 
+      ##a bamtrack list and at the end, in the plotTrack function, get out the bamFiles from the list.  
+      
+      bamTracks <-list()
+      
+      for (bam in bamFiles){
+      
+          bamfile_name <- strsplit(as.character(basename(bam)), split="_subset")[[1]][1]
+          
+          if(bamfile_name == "DHB-18_00"){
+                final_background <- "#D6EBFF"    ## colour specified by hexadecimal string of the form #rrggbb (Yellow) PARENTS
+              }else if (bamfile_name == "DHB-14_00"){
+                final_background <- "#D6EBFF"    ## colour specified by hexadecimal string of the form #rrggbb (Yellow) PARENTS
+              }else{
+                final_background <- "#FFFFEB"  ## colour specified by hexadecimal string of the form #rrggbb (Blue) CHILDREN
+              }
+          
+          bamTracks[[bam]] <- DataTrack( range = bam
+                                       , genome = genome
+                                       , type = c("l","g")
+                                       , name = bamfile_name
+                                       , chromosome = chr
+                                       , from = start
+                                       , to = end
+                                       , ylim = c(0,150)
+                                       , background.panel = final_background
+                                       )
+      }
+    
+
+    png(file=paste0(gene, "_plotTrack.png"))
+    
+    plotTracks( c(    # as bamTracks is a list, is not necessary to put the rest of the objects into a list
+                      # I have left the first list just as model just in case remove bamTracks for copy paste code ;-)
+                    list(  
+                     # iTrack ,
+                      gTrack ,
+                      ht
+                    )
+                    , bamTracks
+                    )
+              , from = start
+              , to = end
+              , main = gene
+              )
+    
+    dev.off()
+    }
+}
+
+
+final_plots <- final_plotrack (query)
+
+```

@@ -1,0 +1,137 @@
+---
+title: "Alignments Track"
+author: "asj"
+date: "11/25/2014"
+output: html_document
+---
+
+Plots of aligned sequences, typically from next generation sequencing experiments can be quite helpful, for
+instance when visually inspecting the validity of a called SNP. Those alignments are usually stored in
+BAM fles.As shown in some of the previous section we can deal with these files in a fairly crude way by coupling them
+to either an AnnotationTrack or a DataTrack. The AlignmentsTrack class is designed to help in exactly these task. 
+
+##Required library
+```{r}
+library ("Gviz")
+library ("GenomicRanges")
+library ("Rsamtools")
+library("biomaRt")
+```
+
+##Obtaining information of genes from biomaRt
+```{r}
+###We can define the region that we want representate obtaining the information from a query performed from biomaRt package. For this, we have to define the information that we need.
+
+gene_basic_info <- c(     "ensembl_gene_id"
+                        , "external_gene_id"
+                        , "start_position"
+                        , "end_position"
+                        , "chromosome_name"
+                        , "strand"
+                        )
+
+gene_desc_info <- c(    "exon_chrom_start"
+                      , "exon_chrom_end"
+                      )
+
+other_gene_info <- c(  
+                        "ensembl_exon_id"
+                      , "ensembl_transcript_id"
+                      )
+
+###The filter that you can use to perform the search is different. For example, you can introduce the HGNC symbol or the Ensembl Gene ID. In this case, we're going to use the HGNC symbol of the genes.
+
+final_filter <- "hgnc_symbol"
+ensembl <- useMart(biomart="ENSEMBL_MART_ENSEMBL", host="grch37.ensembl.org", path="/biomart/martservice" ,dataset="hsapiens_gene_ensembl")
+
+###Now we have defined the information that we want obtain introducing the HGNCsymbol of a gene or genes, and the version that we want to use. I've making a function to obtain this info.
+
+BMgenes <- function (query){
+  
+  genes.info.df <- NULL
+  
+  for (i in query){
+    geneid_result <- getBM (
+        attributes = c(gene_basic_info, gene_desc_info, other_gene_info ),
+        filters = final_filter, 
+        values = i,
+        mart = ensembl
+        )    
+        
+    if(nrow(geneid_result)){
+      
+      if(exists('genes.info.df') & is.data.frame(genes.info.df)) {
+      
+        genes.info.df <- rbind(genes.info.df, geneid_result)
+        
+        } else {
+          genes.info.df <- data.frame(geneid_result)
+              }
+      } else {
+        # log error
+        cat(paste0("#[WARNING] No gene info for gene name:'",i,"'\n"))      
+            }
+        }
+    
+  names(genes.info.df) <- names(geneid_result)
+  
+  return(genes.info.df[grep("LRG", genes.info.df$chromosome_name, invert=TRUE),])
+
+}
+```
+
+##Defining the variables  
+```{r}
+query <- "PCSK9"
+#test: gene <- query
+query_result <- BMgenes (gene)
+width <- query_result$exon_chrom_end - query_result$exon_chrom_start
+query_result <- cbind(query_result, width)
+    
+names(query_result) <- c("gene", "symbol", "start_gene", "end_gene", "chromosome", "strand", "start", "end", "exon", "transcript", "width")
+query_result$strand <- ifelse(query_result$strand==1,  "+", "-")
+        
+chr <- unique(query_result[query_result$symbol == gene, "chromosome"])
+start_gene <- unique(query_result [query_result$symbol == gene, "start_gene"])
+end_gene <- unique(query_result [query_result$symbol == gene, "end_gene"])
+    
+start <- start_gene - 1500
+end <- end_gene + 1500  
+
+genome <- "hg19"
+
+test_bamfile <- "/cpd_home/asj/projects/exome/hypobeta/bams/DHB-14_00_subset_ROI.rgmod.sorted.sorted_chr.sorted.bam"
+```
+
+##Alignment plotTrack
+```{r}
+afrom <- 2960000
+#afrom <-55505135
+ato <- 3160000
+#ato <- 63070392
+
+alTrack <- AlignmentsTrack(system.file(package = "Gviz","extdata", "gapped.bam"), isPaired = TRUE)
+# alTrack <- AlignmentsTrack(test_bamfile, isPaired = TRUE)
+bmt <- BiomartGeneRegionTrack(genome = "hg19", chromosome = "chr12",  start = afrom, end = ato, filter = list(with_ox_refseq_mrna = TRUE), stacking = "dense")
+# bmt <- GeneRegionTrack(query_result, genome = genome, chromosome = chr,  start = start, end = end, stacking = "dense")
+                              
+                              
+# gmtrack <- GeneRegionTrack (    query_result
+#                               , genome = genome
+#                               , chromosome = chr
+#                               , start = start
+#                               , end = end
+#                               , transcriptAnnotation = "transcript"
+#                               , showId = TRUE 
+#                               , collapseTranscripts = F
+#                               , name = "ENSEMBL"
+#                               )
+
+plotTracks(c(bmt, alTrack), from = afrom, to = ato, chromosome = "chr12")
+           
+# plotTracks(c(bmt, alTrack), from = start, to = end, chromosome = chr)
+plotTracks(alTrack, from = afrom, to = ato, chromosome = "chr12")
+
+```
+
+

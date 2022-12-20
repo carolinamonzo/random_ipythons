@@ -1,0 +1,171 @@
+##CODE TO GITHUB
+
+```{r}
+library ("Gviz")
+library ("GenomicRanges")
+library ("Rsamtools")
+library("RSQLite")
+
+## Required info
+
+genome <- "hg19"
+
+query <- c(    "ENSG00000053747"
+             , "ENSG00000144821"
+             , "ENSG00000116793"
+             )
+
+bamFiles <- "file.bam"
+# bamFiles <- c("/storage/ethernus_backup/exome_400_workdir/tmp/MET_400.merge.coincident_variants.subset_chr.sorted.bam")
+# db_path <- "/cpd_home/pmg/databases/ensembl_v75.db"
+
+con <- dbConnect(  RSQLite::SQLite()
+                 , dbname = "/storage/ethernus_miscellanea/References/human/ens_dumps/ens_dumps_v75/ensembl_v75.db"  #db_path
+                 )
+
+
+## Function
+
+final_plotrack <- function(query){
+  
+  info_query_genes.db <- NULL
+  
+  for (i in query){
+    
+    if (is.data.frame(info_query_genes.db) == FALSE){
+      
+      info_query_genes.db <- dbGetQuery(  con
+                                        , paste0('select * from ens_exon where gene_id == \"', i, "\";")
+                                        )
+      }else{
+        
+        new_query <- dbGetQuery(  con
+                                , paste0('select * from ens_exon where gene_id == \"', i, "\";")
+                                )
+        info_query_genes.db <- rbind(  info_query_genes.db
+                                     , new_query
+                                     )
+        }
+    }
+  
+  query_result <- info_query_genes.db
+  
+  exon_width <- query_result$end - query_result$start
+  
+  query_result <- cbind(query_result, exon_width)[,c(1:8,12)]
+  
+  names(query_result) <- c(  "gene"
+                           , "symbol"
+                           , "transcript"
+                           , "exon"
+                           , "chromosome"
+                           , "start"
+                           , "end"
+                           ,  "strand"
+                           , "exon_width"
+                           )
+  
+  query_result$strand <- ifelse(  query_result$strand==1
+                                , "+"
+                                , "-"
+                                )
+  for (gene in query) {
+    
+    query_result_subset <- query_result[query_result$gene == gene,]
+    
+    gene_symbol <- unique(query_result_subset$symbol)
+    
+    chr <- unique(query_result_subset[query_result_subset$gene == gene, "chromosome"])
+    
+    start_gene <- min(query_result_subset[query_result_subset$gene == gene, "start"])
+    
+    end_gene <- max(query_result_subset[query_result_subset$gene == gene, "end"])
+    
+    start <- start_gene - 1500
+    
+    end <- end_gene + 1500  
+    
+    iTrack <- IdeogramTrack(  genome = genome
+                            , chromosome = chr
+                            )
+    
+    gTrack <- GenomeAxisTrack(  add53 = T
+                              , add35 = T
+                              )
+    
+    gmtrack <- GeneRegionTrack (    query_result_subset  
+                                  , genome = genome
+                                  , chromosome = chr
+                                  , from = start
+                                  , to = end
+                                  , transcriptAnnotation = "transcript"
+                                  , showId = TRUE 
+                                  , name = "Transcripts"
+                                  )
+    
+    if (length(bamFiles) == 1){
+      
+      bamTracks <- DataTrack(            range = bamFiles
+                                       , genome = genome
+                                       , type = c("g", "l") #c("l","g")
+                                       , name = "Coverage"
+                                       , chromosome = chr
+                                       , from = start
+                                       , to = end
+                                       , ylim = c(0,150)
+                                       )
+      
+      png(file=file.path(plots_dir, paste0(gene, "_plotTrack.png")), width=500, heigh=100, units="mm", res=300)
+
+      plotTracks(list( iTrack, 
+                       gTrack,
+                       gmtrack,
+                       bamTracks
+                       )
+                 , main = gene_symbol
+                 )
+      dev.off()
+
+      }else{
+        
+        bamTracks <-list()
+        
+        for (bam in bamFiles){
+          
+          bamTracks[[bam]] <- DataTrack(   range = bam
+                                         , genome = genome
+                                         , type = c("l","g")
+                                         , name = bam
+                                         , chromosome = chr
+                                         , from = start
+                                         , to = end
+                                         , ylim = c(0,150)
+                                         )
+        }
+        
+        png(file=file.path(plots_dir, paste0(gene, "_plotTrack.png")), width=500, heigh=100, units="mm", res=300)
+        
+        plotTracks(c(list(
+          gTrack,
+          gmtrack),
+          bamTracks
+          )
+          , from = start
+          , end = end
+          , main = gene_symbol
+          )
+        
+        dev.off()
+        
+        }
+    }
+}
+
+
+#final_plots <- final_plotrack (query)
+final_plots <- final_plotrack (query = c("ENSG00000053747", "ENSG00000144821", "ENSG00000116793"))
+
+
+```
+
+

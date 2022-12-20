@@ -1,0 +1,456 @@
+---
+title: "PlotTracks"
+author: "asj"
+date: "9/29/2014"
+output: html_document
+---
+
+plotTracks
+================
+
+```{r}
+# verbose = 0  # no output
+# verbose = 1  # normal
+# verbose = 2  # verbose
+verbose = 3  # debug
+
+source("/home/asj/asj_cpd/R_modules/asj_utils.R")
+
+
+``` 
+
+
+HighlightTrack_plot
+-----------------------------
+
+### Required library 
+
+```{r}
+library ("GenomicRanges")
+library ("Biostrings")
+library ("Rsamtools")
+# library ("XVector")
+library ("Biobase")
+library ("AnnotationDbi")
+library ("grid")
+library ("GenomicFeatures")
+library ("TxDb.Hsapiens.UCSC.hg19.knownGene")
+library ("Gviz")
+library("biomaRt")
+# library("Rsamtools")
+library("BSgenome")
+library("BSgenome.Hsapiens.UCSC.hg19")
+library("rtracklayer")
+library("BiocGenerics")
+library("VariantAnnotation")
+library("SNPlocs.Hsapiens.dbSNP.20101109") 
+library("xlsx")
+```
+
+### Query information
+
+```{r}
+### query biomart 
+
+gene_basic_info <- c()
+gene_basic_info <- c(     "ensembl_gene_id"
+#                         , "external_gene_id"
+#                         , "hgnc_symbol"
+                        , "start_position"
+                        , "end_position"
+                        , "chromosome_name"
+                        , "strand"
+                        )
+
+gene_desc_info <- c()
+gene_desc_info <- c(    "exon_chrom_start"
+                      , "exon_chrom_end"
+#                       , "gene_biotype"
+#                       , "wikigene_name"
+#                       , "wikigene_id"
+#                       , "wikigene_description"
+#                       , "ens_hs_gene"
+#                       , "external_gene_id"
+#                       , "external_gene_db"
+                      )
+
+other_gene_info <- c()
+other_gene_info <- c(  
+                        "ensembl_exon_id"
+                      , "ensembl_transcript_id"
+#                       , "ensembl_peptide_id"
+#                       , "snp_chromosome_strand"
+#                       , "somatic_snp_chromosome_strand"
+                      )
+
+# final_filter <- "hgnc_symbol"
+final_filter <- "ensembl_gene_id"
+
+```
+
+BiomaRt provides direct access to diverse datasets from diferents databases (ENSEMBL, Uniprot, HapMap)
+------------------------------------------------------------------------------------------------------
+
+```{r}
+##BIOMART WITH ENSEMBL 37 VERSION
+ensembl <- useMart(biomart="ENSEMBL_MART_ENSEMBL", host="grch37.ensembl.org", path="/biomart/martservice" ,dataset="hsapiens_gene_ensembl")
+listDatasets(ensembl)[grepl("sapiens", listDatasets(ensembl)$dataset),] #this is the version that useMArt are using 
+#listMarts(ensembl)
+```
+
+
+
+### Function to obtain info about genes from ENSEMBL through biomaRt
+
+```{r}
+
+BMgenes <- function (query){
+  
+  genes.info.df <- NULL
+  
+  for (i in query){
+    geneid_result <- getBM (
+        attributes = c(gene_basic_info, gene_desc_info, other_gene_info ),
+        filters = final_filter, 
+        values = i,
+        mart = ensembl
+        )    
+    feedback(str(geneid_result))
+    # geneid_result is a df
+    # check that I had a result
+    
+    if(nrow(geneid_result)){
+      
+      if(exists('genes.info.df') & is.data.frame(genes.info.df)) {
+        # debug
+        genes.info.df <- rbind(genes.info.df, geneid_result)
+        
+        } else {
+          feedback(cat("crating dataframe\n"),v=3)
+          genes.info.df <- data.frame(geneid_result)
+              }
+      } else {
+        # log error
+        cat(paste0("#[WARNING] No gene info for gene name:'",i,"'\n"))      
+            }
+        }
+    
+  names(genes.info.df) <- names(geneid_result)
+  
+  
+  feedback(str(genes.info.df),v=3)
+  return(genes.info.df[grep("LRG", genes.info.df$chromosome_name, invert=TRUE),])
+
+}
+
+```
+
+
+### Definition of variables  
+
+```{r} 
+# Working directory
+file_path <- "~/winbioinfo/users/asj/projects/exome/data/Info_variaciones_graficos.xlsx"
+data_genes <- read.xlsx(file_path, sheetIndex = 1)
+names(data_genes) <- c("chr_position", "gene", "rs", "ensembl_ID", "changed_aa", "codon")
+
+
+# Data info genes
+query <- data_genes$ID.Ensemble
+genome <- "hg19"
+
+#Plotrack function
+final_plotrack <- function(query){
+   
+  for (gene in query) {
+    #test  gene <- "GCKR"
+    #test  gene <- "ENSG00000084734"
+    query_result <- BMgenes (gene)
+        
+    chr <- unique(query_result[query_result$external_gene_id == gene, "chromosome_name"])
+    start_gene <- unique(query_result [query_result$external_gene_id == gene, "start_position"])
+    end_gene <- unique(query_result [query_result$external_gene_id == gene, "end_position"])
+    
+    start <- start_gene -1500
+    end <- end_gene  
+    
+# Wanted tracks
+    iTrack <- IdeogramTrack(  genome = genome
+                            , chromosome = chr
+                          )
+    
+    gTrack <- GenomeAxisTrack()
+    
+    gmartTrack <- BiomartGeneRegionTrack(    genome = genome
+                                           , chromosome = chr
+                                           , start = start
+                                           , end = end
+                                           , name = "ENSEMBL"
+                                           , showId = TRUE 
+                                          #, stacking = "dense"
+                                           , collapseTranscripts = F
+#                                            , abline(v=1000, col="red")
+                                           )
+    
+    ht <- HighlightTrack(trackList = list(
+                                            gmartTrack
+#                                           , atrack
+#                                           , dtrack
+                                          )
+                         , start = start + 2000
+                         , width = 7000
+                         , chromosome = chr
+                         )
+
+
+
+# PlotTracks function
+    plotTracks( c(    iTrack
+                    , gTrack
+                    , gmartTrack#, from = st, to = nd
+                    )
+                  , from = start - 2000
+                  , to = end
+                  , add53 = T
+                  , add35 = T
+#                   , panel.only == T ####  prove this option
+                  , main = paste0(gene, ":" , " variation") # add subtitle with sample description
+                )    
+    
+}
+
+#data_genes[]
+
+
+```
+
+###Definition tracks
+
+```{r}
+## Track of chromosome representation
+
+iTrack <- IdeogramTrack(  genome = genome
+                        , chromosome = chr
+                        )
+str(iTrack)
+
+## Genome Axis representation
+
+gTrack <- GenomeAxisTrack()
+
+str (gTrack)
+
+## Representation of CpG Islands from UCSC data
+
+cpgTrack <- UcscTrack(    genome = genome
+                        , chromosome = chr
+                        , track = "cpgIslandExt"
+                        , from = start
+                        , to = end
+                        , trackType ="AnnotationTrack"
+                        , start = "chromStart"
+                        , end = "chromEnd"
+#                         , id = "name"
+#                         , shape = "box"
+#                         , fill = "#006400"
+                        , name="CpG Islands"
+                        )
+str(cpgTrack)
+## Representation from biomaRt gene region
+
+gmartTrack <- BiomartGeneRegionTrack(     genome = genome
+                                        , chromosome = chr
+                                        , start = start
+                                        , end = end
+                                        , name = "ENSEMBL"
+                                        , showId = TRUE 
+                                        #, stacking = "dense"
+                                        , collapseTranscripts = T
+                                        )
+str(gmartTrack)
+
+
+## Sequence representation 
+
+## if end - start < 100 : doing seqTrack representation
+library(BSgenome.Hsapiens.UCSC.hg19)
+seqTrack <- SequenceTrack(Hsapiens)
+
+# If you want change the fontcolor
+
+# fcol <- c(A="darkgray", C="darkgray", T="darkgray", G="darkgray")
+# plotTracks(sTrack, chromosome = chr, from = start, to = end, fontcolor=fcol)
+
+
+## Finding SNPs
+
+snpmart <- useMart("snp", dataset = "hsapiens_snp")
+
+snp_attributes <- c(    "refsnp_id"
+                      , "allele"
+                      , "chrom_start"
+                      , "chrom_strand")
+
+snp_filters <- c(  "chr_name"
+                 , "chrom_start"
+                 , "chrom_end")
+
+
+
+SNP_region  <-  getBM(    snp_attributes
+                        , snp_filters
+                        , values = list(chr, start, end)
+                        , mart = snpmart
+                        )
+head (SNP_region)
+
+
+## SNP Track
+
+snpTrack <- UcscTrack(      genome = genome
+                          , chromosome = chr
+                          , track = "snp138"
+                          , from = start
+                          , to = end
+                          , trackType = "AnnotationTrack"
+                          , start = "chromStart"
+                          , end = "chromEnd"
+                          , id = "name"
+                          , feature = "func"
+                          , strand = "strand"
+                          , shape = "box"
+                          , stacking = "dense"
+                          , fill="black"
+                          , name="SNPs"
+                          )
+    # Ask for the available tables using the tackNames function in combination with a session object: 
+    ses <- browserSession()
+    genome(ses) <- genome
+    str(trackNames(ses))
+    
+    trackNames_query <- "snp*"
+    trackNames_query <- "pobl*"
+    # trackNames_query <- "snp*"
+    # trackNames_query <- "snp*"
+    
+    grep(trackNames_query, trackNames(ses), value = T)
+
+
+## Complete seq
+
+seqType <- "cdna"
+# seqType <- "peptide"
+# seqType <- "3utr"
+# seqType <- "5utr"
+# seqType <- "genomic"
+
+complete_seq <- getSequence(  
+#                             , chromosome = chr
+#                             , start = start
+#                             , end = end
+                            , id = query
+                            , type = final_filter
+                            , seqType = seqType
+                            , mart = ensembl)
+complete_seq
+
+
+## seqTrack exon region
+
+require(BSgenome.Hsapiens.UCSC.hg19)
+seqTrack <- SequenceTrack(Hsapiens, chromosome = chr)
+
+
+## Coverage representation from a bam file
+
+# bamFile_tutorial_blog <- "/home/asj/incliva/r/r_workspace/bioconductor_training/project_gviz/data/wgEncodeRikenCageK562NucleusPamAln(1).bam"
+# bamFile_dani <- "/media/data2/asj_workspace/r_workspace/exome/scripts/project_gviz/data/DHB-18.00.sorted.gene_subset.bam"
+# bamFile_dani_albahome <- "/Volumes/ALBA/incliva/r/r_workspace//bioconductor_training//gviz//plotTracks//data//DHB-18.00.sorted.gene_subset.bam"
+
+bamFile_dani_alba <- "/home/asj/incliva/r/r_workspace/bioconductor_training/gviz/plotTracks/data/DHB-18.00.sorted.gene_subset_chr.sorted.bam"
+
+# bamFile <- bamFile_tutorial_blog
+# bamFile <- bamFile_dani
+bamFile <- bamFile_dani_alba
+
+require(Rsamtools)
+indexBam (bamFile) ## Index the bam file 
+
+
+bamTrack <- DataTrack(  range = bamFile
+#                       , options (ucscChromosomeNames = F)
+                      , genome = genome
+                      , type = c("l","g")
+                      , name = ("Cov",)
+                      , chromosome = chr
+                      , from = start
+                      , to = end
+#                      , window = -1
+
+                      )
+str(bamTrack)
+
+```
+
+
+
+
+###Plot tracks
+
+```{r}
+png(file="LDLR_plotTrack.png")
+plotTracks( list(      iTrack
+                     , gTrack
+                     , cpgTrack
+                     , gmartTrack#, from = st, to = nd
+                     , bamTrack
+                     , snpTrack
+#                      , dtrack
+#                      , seqTrack
+                     ) 
+            , from = start - 2000
+            , to = end
+            , add53 = T
+            , add35 = T
+            ) 
+dev.off()
+```
+
+```{r}
+library ("ggplot2")
+
+
+
+
+
+pdf(file="LDLR_plotTrack.pdf")
+plot(final_plotTrack)
+dev.off()
+
+```
+
+
+
+###Process to obtain a correct bam
+
+```
+asj@ubuntu:~/incliva/r/r_workspace/bioconductor_training/project_gviz/data$ 
+
+samtools view -H DHB-18.00.sorted.gene_subset.bam |perl -lpe 's/SN:([1-9XY])/SN:chr$1/' > DHB-18.00.sorted.gene_subset_chr.sam
+
+samtools view  DHB-18.00.sorted.gene_subset.bam | perl -lane '$F[2]=~s/^([1-9XY])/chr$1/; $F[6]=~s/^([1-9XY])/chr$1/; print join("\t", @F) ' >> DHB-18.00.sorted.gene_subset_chr.sam
+
+samtools view -hSb DHB-18.00.sorted.gene_subset_chr.sam > DHB-18.00.sorted.gene_subset_chr.bam
+
+samtools sort DHB-18.00.sorted.gene_subset_chr.bam DHB-18.00.sorted.gene_subset_chr.sorted
+
+samtools index DHB-18.00.sorted.gene_subset_chr.sorted.bam 
+
+```
+
+```{r sesion_info}
+
+sessionInfo()
+
+```
+

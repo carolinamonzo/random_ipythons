@@ -1,0 +1,221 @@
+---
+title: "hypobeta plots"
+output: html_document
+---
+
+```{r}
+library("ggplot2")
+library("plyr")
+library("reshape2")
+library("xlsx")
+library("stringr")
+library("data.table")
+```
+
+
+##Coverage distribution
+```{r}
+
+wd <- "/storage/hpc3_scratch/hypobeta_axeq_incliva/analysis"
+cov_wd <- file.path(wd, "cov", "merged_cov_axeq_incliva")
+coverage_summary_files <- grep("all.hist_cov", list.files(cov_wd, full.names = T), value = T)
+
+samples_id <- sapply(coverage_summary_files, function(x){strsplit(as.character(basename(x)), '_axeq')[[1]][1]})
+
+#samples_id <- read.delim("/home/asj/winbioinfo/users/asj/projects/ATA/analysis/coverage/ind_list", header = F)
+
+for (i in samples_id){
+#for (i in coverage_summary_files){  
+  #test:  i <- "/home/asj/winbioinfo/users/asj/projects/hipobeta/analysis/cov/DHB-14.00_L004_L005.merge.rgmod.sorted._only_all.hist_cov"
+  ## test: i <- "DHB-18.00"
+
+  cat("## Processing hist cov for sample", i, "\n")
+  file_path <- grep(i, coverage_summary_files, i,value = T)
+  hist_cov_all_subset <- read.delim(file_path, header = F, sep = "\t")
+  
+  names(hist_cov_all_subset) <- c("chr", "coverage", "number_bases", "total_bases", "ratio")
+  
+  hist_cov_all_subset$cum_sum_ratio <- cumsum(hist_cov_all_subset$ratio)
+  
+  hist_cov_all_subset$sample <- i
+  
+  #write.table(hist_cov_all_subset, file.path(cov_wd, paste0(i, "_cum_sum")), row.names = F, quote = F, sep = "\t")
+  
+}
+
+##<TO_DO> with system call:   perl -lne '($sample=$ARGV)=~s/_all.+//;print $_."\t".$sample' ATA_* > all_concat
+
+## Getting the concatenated file that I've obtained in the shell
+all_concat_hist_cov_cum_sum_path <- file.path(cov_wd, "all_concatenated_hist_cov_cum_sum")
+all_concat_hist_cov_cum_sum.df <- read.delim(all_concat_hist_cov_cum_sum_path, header = T, sep = "\t", stringsAsFactors = F)
+
+final_file <- all_concat_hist_cov_cum_sum.df
+#final_file <- all_concat_hist_cov_cum_sum_non_VARs.df
+
+  p <- ggplot(subset(final_file, (1-cum_sum_ratio) > 0.1), aes(x=coverage, y=1-cum_sum_ratio, group=sample, color=sample))
+    
+  p + geom_line() +
+  geom_vline(xintercept = 20, col="red") +
+  scale_x_continuous(limits=c(0,200), breaks=seq(0,200,10))  +
+  scale_y_continuous(breaks=seq(0,1,0.1), labels=seq(0,1,0.1)*100) +
+  labs(list(title = "Percentage of bases with a minimum coverage\n", x = "\nMinimum Coverage", y = "% bases")) +
+  theme(  plot.title=element_text(size=20, lineheight=.8, face="bold"))  
+  
+```
+
+##Percentage of bases with at minimum cov of 10 by indiv
+```{r}
+##gte : greater than equal
+
+##Minimum coverage of 10
+cum_sum_dp_gte_10.df <- all_concat_hist_cov_cum_sum.df[all_concat_hist_cov_cum_sum.df$coverage == 10,]
+cum_sum_dp_gte_10.df$bases_covered_gte_10x <- 1-cum_sum_dp_gte_10.df$cum_sum_ratio
+cum_sum_dp_gte_10_sorted.df <- cum_sum_dp_gte_10.df[order(cum_sum_dp_gte_10.df$sample),]
+
+##Minimum coverage of 20
+cum_sum_dp_gte_20.df <- all_concat_hist_cov_cum_sum.df[all_concat_hist_cov_cum_sum.df$coverage == 20,]
+cum_sum_dp_gte_20.df$bases_covered_gte_20x <- 1-cum_sum_dp_gte_20.df$cum_sum_ratio
+cum_sum_dp_gte_20_sorted.df <- cum_sum_dp_gte_20.df[order(cum_sum_dp_gte_20.df$sample),]
+
+##Minimum coverage of 40
+cum_sum_dp_gte_40.df <- all_concat_hist_cov_cum_sum.df[all_concat_hist_cov_cum_sum.df$coverage == 40,]
+cum_sum_dp_gte_40.df$bases_covered_gte_40x <- 1-cum_sum_dp_gte_40.df$cum_sum_ratio
+cum_sum_dp_gte_40_sorted.df <- cum_sum_dp_gte_40.df[order(cum_sum_dp_gte_40.df$sample),]
+
+##Getting summary table
+subset_cum_sum_dp_gte_sorted.df <- subset(cum_sum_dp_gte_10_sorted.df, select = 7:8)
+subset_cum_sum_dp_gte_sorted.df$bases_covered_gte_20x <- subset(cum_sum_dp_gte_20_sorted.df, select = 8)
+subset_cum_sum_dp_gte_sorted.df$bases_covered_gte_40x <- subset(cum_sum_dp_gte_40_sorted.df, select = 8)
+
+str(subset_cum_sum_dp_gte_sorted.df) 
+
+#write.table(subset_cum_sum_dp_gte_sorted.df, file.path(wd, "cum_cov_10x_20x.tsv"), sep = "\t", quote = F, row.names = F)
+
+```
+
+##ROI coverage per base
+```{r}
+
+pb_cov_dir <- "/storage/hpc3_scratch/hypobeta_axeq_incliva/analysis/cov/merged_cov_axeq_incliva"
+
+pb_cov_files <- grep("ROI_pb_cov", list.files(pb_cov_dir, full.names = T), value = T)
+
+##plot features
+png_width=640
+png_height=440
+
+for (i in pb_cov_files){
+  ## test:   i <- "/storage/hpc3_scratch/hypobeta_axeq_incliva/analysis/cov/merged_cov_axeq_incliva/DHB-18_00_axeq_incliva.ROI_pb_cov"
+  sample_pb_cov <- read.delim(i, header = F, sep = '\t')
+  names( sample_pb_cov) <- c("chr", "start", "end", "id", "base", "coverage")
+  ordered_sample_pb_cov <- sample_pb_cov[order(sample_pb_cov$start),]
+  ordered_sample_pb_cov$pos_gene <- ordered_sample_pb_cov$start + ordered_sample_pb_cov$base -1
+  
+  sample <- strsplit(basename(i), split = "_axeq")[[1]][1]
+  
+  if(sample == "DHB-14_00"){
+    sample_name <- "P1"
+  }else if(sample == "DHB-14_01"){
+    sample_name <- "P3"
+  }else if(sample == "DHB-14_02"){
+    sample_name <- "P4"
+  }else if(sample == "DHB-18_00"){
+    sample_name <- "P2"
+  }
+  
+  gene <- "ANGPTL3"
+  
+  #for (gene in c("ANGPTL3", "PCSK9", "APOB", "LDLR", "MTTP")){
+    ##test:   gene <- "MTTP"
+    subset_ordered_sample_pb_cov <- ordered_sample_pb_cov[grep(gene,ordered_sample_pb_cov$id),]
+    
+    png(filename = file.path("~/winbioinfo/users/asj/projects/hipobeta/plots", paste0(gene, "_", sample_name, "_pb_cov.png")), width = png_width, height = png_height)
+    
+    m <- ggplot(data = subset_ordered_sample_pb_cov, aes(x=pos_gene, y=coverage))
+    
+    m + geom_area(fill="#0066CC") +
+      geom_hline(yintercept=20, color="red") +
+      facet_wrap(~ start, nrow = 1, scales='free_x') +
+      theme_bw() +
+      scale_y_continuous(breaks=seq(min(ordered_sample_pb_cov$coverage), max(ordered_sample_pb_cov$coverage), 100)
+                         , expand = c(0, 0)  ## with this option you can avoid the white space that is present between the plot and the axis
+                         ) +                     
+      scale_x_continuous(breaks=c(unique(ordered_sample_pb_cov$start), unique(ordered_sample_pb_cov$end))) +
+      labs(title = paste0(gene, " ", sample_name, "\n")) +
+      theme(  plot.title=element_text(size=22, lineheight=.8, face="bold")
+              , axis.text=element_text(size=9)
+              , axis.title=element_text(size=10)
+              , axis.text.x=element_text(angle=90, vjust=0.5)
+              #         , legend.position = "none"
+              )
+    dev.off() 
+  
+#  }
+}
+```
+
+
+##Reads distribution
+```{r}
+files <- c(CFTR_R1_read_distribution_path, CFTR_R2_read_distribution_path, GGK_R1_read_distribution_path, GGK_R2_read_distribution_path)
+
+for (i in files){
+  #test:
+  # i <- "/cpd_home/asj/projects/miseq/run1/data/CFTR-7-5_S4_L001_R1_001_reads_distribution.tsv"
+  # i <- "/cpd_home/asj/projects/miseq/run1/data/CFTR-7-5_S4_L001_R2_001_reads_distribution.tsv"
+  # i <- "/cpd_home/asj/projects/miseq/run1/data/GGK-7-5_S3_L001_R1_001_reads_distribution.tsv" 
+  # i <- "/cpd_home/asj/projects/miseq/run1/data/GGK-7-5_S3_L001_R2_001_reads_distribution.tsv"
+  
+  file_distribution <- read.delim (i, sep = '\t', header = F)
+  names(file_distribution) <- c("length", "number_reads")
+  
+  basename_file <- paste0(strsplit(strsplit(as.character(basename(i)), split = "_")[[1]][1], split="-7")[[1]][1], "_", strsplit(as.character(basename(i)), split = "_")[[1]][4])
+  
+  png(filename = file.path(plots_dir, paste0(basename_file, "_read_distribution.png")), width = png_width, height = png_height)
+  
+  c <- ggplot(file_distribution, aes(x=length, y=number_reads))
+  
+  c + geom_line() + #coord_flip() +
+    scale_x_continuous(breaks=seq(0, 300, 10)) + 
+    labs(title = paste0(basename_file, "  Reads Distribution\n")) +
+    theme(    plot.title=element_text(size=22, lineheight=.8, face="bold")
+            , axis.text=element_text(size=10)
+            , axis.title=element_text(size=14)
+            , axis.text.x=element_text(angle=90, vjust=0.5)
+            )
+  
+  dev.off()
+}
+
+
+```
+
+
+
+
+
+
+
+
+```
+##Joining genotypes and vep info file for filtering at dp4_Q20
+wd <- "/home/asj/winbioinfo/users/asj/projects/hipobeta/analysis/vep_selection/dp4_Q20"
+
+vep_info_path <- file.path(wd, "identified_candidate_genes_some_consequences_maf_0_1-with_empty-vep_info.txt")
+
+genotypes_path <- file.path(wd, "identified_candidate_genes_some_consequences_maf_0_1-with_empty-genotypes.txt")
+
+genotypes <- read.delim(genotypes_path, header = F, sep='\t')
+vep_info <- read.delim(vep_info_path, header = F, sep='\t')
+
+merged_df <- merge(vep_info, genotypes, by.x = "V1", by.y = "V1")
+
+names(merged_df) <- c("Location", "Gene_name", "EUR_MAF", "Consequence", "Base_change", "AA_change", "14_00", "14_01", "14_02", "18_00")
+
+write.table(merged_df, file.path(wd, "identified_candidate_genes_some_consequences_maf_0_1-with_empty-complete_info.txt"), sep = '\t', quote = F, row.names = F)
+
+```
+
+
+
+
