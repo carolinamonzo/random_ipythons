@@ -1,0 +1,79 @@
+---
+title: "trees-genomesTTV"
+output: pdf_document
+---
+
+```{r load?packages}
+setwd("~/workspace/Incliva_wkspace/TTV_estela")
+
+### Load packages
+library(dada2) # Info on sequence processing
+library(DECIPHER) # Sequence alignment
+library(phangorn) # Phylogenetic tree generation
+library(ggplot2)
+library(phyloseq)
+library(ape)
+library(magrittr)
+```
+```{r load_sequences}
+seqs = read.FASTA("./amplicon_region_TTV-identified.fa", type = "DNA")
+seqs
+```
+
+```{r make alignments}
+# Format our DNAbin object to DNAStringSet object
+seqsSet = seqs %>% as.character %>% lapply(.,paste0,collapse="") %>% unlist %>% DNAStringSet
+
+# Make alignments using DECIPHER
+alignment = AlignSeqs(DNAStringSet(seqsSet), anchor=NA, verbose = TRUE)
+# Construct the phylogenetic tree using phangorn
+phangAlign = phyDat(as(alignment, "matrix"), type = "DNA")
+dm = dist.ml(phangAlign)
+treeNJ = NJ(dm)
+fit = pml(treeNJ, data=phangAlign)
+fitGTR = update(fit, k=4, inv=0.2)
+fitGTR = optim.pml(fitGTR, model="GTR", optInv = TRUE, optGamma = TRUE, rearrangement = "stochastic", control = pml.control(trace = 0))
+```
+
+```{r}
+plot(treeNJ, "unrooted", main = "NJ")
+```
+```{r normal_tree}
+plot_tree(fitGTR$tree, method = "sampledodge", label.tips = "taxa_names", text.size = 3, plot.margin = 0.6, ladderize = "left", base.spacing = 0.09)
+```
+
+```{r circular_tree}
+plot_tree(fitGTR$tree, method = "sampledodge", label.tips = "taxa_names", text.size = 2, plot.margin = 0.4, ladderize = "left", base.spacing = 0.09) + coord_polar(theta="y")
+```
+
+```{r bootstrap}
+# Trying to compute bootstrap
+bs = bootstrap.pml(fitGTR, bs=1000, optNni=TRUE, control = pml.control(trace=0))
+# Now plotting it
+plotBS(midpoint(fitGTR$tree), bs, p=50, type="p")
+```
+
+```{r}
+# consensus network
+cnet = consensusNet(bs, p=0.2)
+plot(cnet, "2D", show.edge.label=TRUE)
+```
+```{r consensus_tree}
+tiff("consensus_tree-amplicons.tiff", height = 25, width = 30, units = "cm", compression = "lzw", res = 300)
+plot(fitGTR$tree, type = "unrooted", lab4ut="axial", edge.width=1.5, cex=0.6, no.margin=TRUE, use.edge.length=FALSE)
+dev.off()
+```
+```{r}
+tiff("consensus_tree-BS-amplicons.tiff", height = 25, width = 30, units = "cm", compression = "lzw", res = 300)
+plotBS(fitGTR$tree, bs, type = "unrooted", lab4ut="axial", edge.width=1.5, cex=0.6, no.margin=TRUE, use.edge.length=FALSE)
+dev.off()
+```
+```{r}
+distancematrix1 = as.matrix(dm)
+tiff("distance_heatmap.tiff", height = 25, width = 40, units = "cm", compression = "lzw", res = 300)
+par(mar=c(10,7,2,1)) 
+heatmap(distancematrix1, no.margin = FALSE)
+dev.off()
+```
+
+

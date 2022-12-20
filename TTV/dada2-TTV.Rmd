@@ -1,0 +1,230 @@
+---
+title: "dadaTTV"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+# Set working directory for this test
+setwd("~/workspace/Incliva_wkspace/TTV_estela")
+
+### Load packages
+library(dada2) # Info on sequence processing
+library(DECIPHER) # Sequence alignment
+library(phangorn) # Phylogenetic tree generation
+library(ggplot2)
+library(phyloseq)
+```
+
+```{r get_files}
+# Specify path with data files
+path = "./raw_reads" # Files must be unzipped (We have fastq R1 and R2)
+list.files(path)
+
+# # Sort the files to ensure forward/reverse are in the same order
+fnFs = sort(list.files(path, pattern = '_R1_merged.fastq'))
+fnRs = sort(list.files(path, pattern = '_R2_merged.fastq'))
+
+# Extract sample names, assuming filenames have format: SAMPLENAME_Rx_001.fastq
+sample.names = sapply(strsplit(fnFs, "_"), `[`, 1)
+
+# Specify the full path to the fnFs and fnRs
+fnFs = file.path(path, fnFs)
+fnRs = file.path(path, fnRs)
+
+# Plot quality scores and determine trimming cutoffs (here we are looking at the
+# first two files)
+plotQualityProfile(fnFs[1:2])
+plotQualityProfile(fnRs[1:2])
+```
+
+```{r filtering_reads}
+# We want to filter so we need to set a path to store them
+filt_path = file.path(path, "filtered") # Place the filtered files in filtered/ directory
+ifelse(!dir.exists(filt_path), dir.create(filt_path), FALSE)
+
+# Rename filtered files
+filtFs = file.path(filt_path, paste0(sample.names, "_F_filt.fastq.gz"))
+filtRs = file.path(filt_path, paste0(sample.names, "_R_filt.fastq.gz"))
+```
+
+Quality filtering and trimming  
+truncLen corresponds to the number of the base in which the quality drops below
+30, so we will be trimming bases from 240 onwards in the Fwd and 160 onwards in Rvs  
+
+Keep in mind how long is our amplicon and how much overlap we need, since
+DADA2 needs 20nt by default  
+For V4 normally we have almost complete overlap and can trim reads aggressively
+maxN = 0 means that we dont want any ambiguous bases allowed  
+maxEE, it is the maximum number of estimated errors allowed for an individual read,
+reads with more EE than this number will be discarded  
+truncQ = truncates reads at the first instance of a Q score less than or equal to
+the value specified (so a double check on quality)  
+
+```{r filter}
+out = filterAndTrim(fnFs, filtFs, fnRs, filtRs, truncLen=c(130,130),
+                    maxN=0, maxEE = c(2,2), truncQ=2, rm.phix=TRUE,
+                    compress=TRUE, multithread=TRUE)
+#### Since some files did not have reads that passed quality control, we have 
+# to call for files again
+filtFs = file.path(filt_path, sort(list.files(filt_path, pattern = '_F_filt.fastq.gz')))
+filtRs = file.path(filt_path, sort(list.files(filt_path, pattern = '_R_filt.fastq.gz')))
+
+head(out)
+```
+Remember that every batch of sequencing will have a different error rate  
+This alternates error rate estimation and sample composition inference until
+they converge at a consistent solution  
+
+```{r plot_errors}
+# Estimate the error model for DADA2 algorithm
+errF = learnErrors(filtFs, multithread=TRUE)
+errR = learnErrors(filtRs, multithread = TRUE)
+
+# Plot error rates for all possible base transitions as a function of quality score
+# Black line are observed error rates
+# Red line are expected error rate under the nominal definition of the Q-value
+# Remember that frequency of errors decrease as quality score increases
+plotErrors(errF, nominalQ = TRUE)
+plotErrors(errR, nominalQ = TRUE)
+```
+```{r derep, echo=FALSE}
+sample.names = sapply(strsplit(filtFs, "_"), function(filtFs) paste(filtFs[1:2], collapse="-"))
+
+# Dereplicate FASTQ files to speed up computation
+derepFs = derepFastq(filtFs, verbose = TRUE)
+derepRs = derepFastq(filtRs, verbose = TRUE)
+
+# Name the derep-class objects by the sample names
+names(derepFs) = sample.names
+names(derepRs) = sample.names
+```
+
+The heart of the dada2 is a network so we do sample inference  
+Using the error model developed earlier, the algorithm calculates abundance p-values for each unique sequence  
+Tests null hypothesis that a sequence with a given error rate is too abundant to be explained by sequencing errors  
+Low p-value indicates that there are more reads of sequence than can be explained by sequencing errors  
+High p-value, a read was likely caused by errors  
+
+```{r variant_inference, echo=FALSE}
+# Apply core sequence-variant inference algorithm to reverse reads
+dadaRs = dada(derepRs, err=errR, multithread=TRUE)
+dadaFs = dada(derepFs, err=errF, multithread=TRUE)
+```
+Merge denoised reads  
+Merges paired end reads only if they exactly overlap  
+  This is because both forward and reverse reads have been denoised and should be error-free. This can be changed by adding maxMismatch option  
+If we want to, we can change the overlap as well using minOverlap or if needed, we can concatenate the two reads
+```{r merge}
+mergers = mergePairs(dadaFs, derepFs, dadaRs, derepRs, verbose=TRUE)
+# Inspect the merger data.frame from the first sample
+head(mergers[[1]])
+```
+Now that we have merged our forward and reverse reads, we want to tabulate the denoised-merged reads, we create a sequence table of these ribosomal sequences variants (this table is analogous to an OTU table)
+
+```{r table_it}
+seqtab = makeSequenceTable(mergers)
+dim(seqtab)
+# To see the size of the reads (top row) and count per read-length (bottom row)
+table(nchar(getSequences(seqtab)))
+```
+
+Chimera cheking and removal. This does a multiple sequence alignment using needleman-wunsch global alignment, comparing each sequence to all more abundant sequences to find combinations of "left" and "right" parents to completely cover the child sequence (the bimera can be primer dimer etc)
+
+```{r chimeras}
+seqtab.nochim = removeBimeraDenovo(seqtab, method='consensus', multithread=TRUE,
+                                   verbose=TRUE)
+dim(seqtab.nochim)
+# First number of dimension is number of bimeras, second number, input sequences.
+
+```
+```{r chimeras_stats}
+# To get the proportion of non chimeric reads 
+sum(seqtab.nochim)/sum(seqtab)
+```
+It is normal for a large majority of unique sequences to be flagged as chimeric,
+they should make up a small proportion of total reads.  
+If a majority of total reads are chimeric, we have a problem, the most likely
+explanation is that primers were not completely removed from reads, we are using
+primers with ambiguous bases that cause reads to be flagged as chimeras.  
+We should re-run filterAndTrim() command using the trimLeft argument.  
+If that doesn't fix it, there may be other factors at play, we should try trimming
+more low quality bases and think about how complex is our community.  
+  
+  
+In our case, our community is not very diverse and our primers are very ambiguous, so we'll see what we can do with this data.
+
+```{r view_merged_reads}
+View(t(seqtab.nochim))
+```
+
+To see the number of reads that made it through each step in the pipeline
+```{r stats}
+getN <- function(x) sum(getUniques(x))
+track <- cbind(out, sapply(dadaFs, getN), sapply(dadaRs, getN), sapply(mergers, getN), rowSums(seqtab.nochim))
+# If processing a single sample, remove the sapply calls: e.g. replace sapply(dadaFs, getN) with getN(dadaFs)
+colnames(track) <- c("input", "filtered", "denoisedF", "denoisedR", "merged", "nonchim")
+rownames(track) <- sample.names
+head(track)
+write.csv(track, "stats_steps-processing.csv")
+```
+
+Lets try to do taxonomic assignment
+```{r tax-assign}
+taxa = assignTaxonomy(seqtab.nochim, "./genome_assemblies/formated_ttv-genomes.fa", multithread=TRUE, taxLevels = c("Kingdom", "Phylum", "Family", "Genus", "Species"), verbose = TRUE)
+unname(head(taxa))
+```
+
+Study phylogenetic relationship
+
+```{r phylogenetic_relationship}
+sequences = getSequences(seqtab.nochim)
+names(sequences) = sequences
+# Run sequence alignment (MSA) using DECIPHER
+alignment = AlignSeqs(DNAStringSet(sequences), anchor=NA)
+```
+It determines the distance matrix based on shared 7-mers,  
+Clusters into groups by similarity  
+Aligns sequences  
+Determines distance matrix based on alignment  
+Reclusters into groups by similarity  
+Realigns sequences  
+
+Then we pass this output to the pahngorn package that creates the tree using
+neighbor joining. Subsequently, it uses this tree as a starting point to create
+a GTR+G+I (Generalized time-reversible with Gamma rate variation) maximum
+likelihood tree
+
+```{r tree}
+# Change sequence alignment output to phyDat structure
+phang.align = phyDat(as(alignment, "matrix"), type="DNA")
+# Create distance matrix
+dm = dist.ml(phang.align)
+# Perform neighbor joining
+treeNJ = NJ(dm)
+# Internal maximum likelihood
+fit = pml(treeNJ, data=phang.align)
+# Negative edges length changed to 0, so we have to filter the output
+fitGTR = update(fit, k=4, inv=0.2)
+fitGTR = optim.pml(fitGTR, model="GTR", optInv=TRUE, optGamma=TRUE,
+                   rearrangement="stochastic", control= pml.control(trace = 0))
+
+```
+```{r tree_it}
+ps = phyloseq(otu_table(seqtab.nochim, taxa_are_rows = FALSE), tax_table(taxa), phy_tree(fitGTR$tree))
+
+writeLines(unlist(lapply(sample.names, paste, collapse='\n')))
+
+map = import_qiime_sample_data("./genome_assemblies/samplenames.txt")
+
+ps = merge_phyloseq(ps, map)
+
+testing = subset_taxa(ps, Genus != "Unclassified")
+plot_tree(testing, color = "Genus", label.tips = "Species", base.spacing = 0.05, plot.margin = 2, text.size = 3)
+```
+```{r plot}
+ggplot(testing, aes(TotalAgundance, Prevalence/nsamples(ps), color=Genus))
+```
+
+
+
+
